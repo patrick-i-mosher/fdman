@@ -3,13 +3,13 @@ CC := gcc
 LIBDIR := /home/parsons/Dev/lib
 LIBFLAGS := -fpic -shared
 
-all: clean libprocinfo fdwrite
+all: fdwrite tracer
 
-libprocinfo: libprocinfo.c
-	$(CC) -o $(LIBDIR)/$@.so $^ $(CFLAGS) $(LIBFLAGS)
+#libprocinfo: libprocinfo.c
+#	$(CC) -o $(LIBDIR)/$@.so $^ $(CFLAGS) $(LIBFLAGS)
 
-fdwrite: fd_write.c
-	$(CC) -o $@ $(CFLAGS) $^ -L$(LIBDIR) -l:libprocinfo.so
+fdwrite: fd_write.c tracer.o
+	$(CC) -o $@ $(CFLAGS) $^ 
 
-clean:
-	rm $(LIBDIR)/libprocinfo.so
+tracer: tracer.c
+	$(CC) -o $@.o $(CFLAGS) $^
