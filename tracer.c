@@ -41,8 +41,11 @@ long trace( int request, void *addr, size_t data) {
 	}
 	return ret;
 }
-
+void end_trace() {
+	trace(PTRACE_DETACH, 0, 0);
+}
 // Remotely force the target process to dlopen a library.
+
 unsigned long myDlopen( const char *libname ) {
 	unsigned long pmem = copyString(libname);
 	unsigned long plib = call( _dlopen, 2, pmem, 0 );
@@ -53,6 +56,7 @@ unsigned long myDlopen( const char *libname ) {
 }
 
 // Remotely call dlsym on the target process.
+
 unsigned long myDlsym( unsigned long dl, const char *symname ) {
 	unsigned long pmem = copyString(symname);
 	unsigned long psym = call( _dlsym, 2, dl, pmem );
@@ -62,9 +66,21 @@ unsigned long myDlsym( unsigned long dl, const char *symname ) {
 	return psym;
 }
 
+
 // Free remotely allocated memory.
 void myFree( unsigned long p ) {
 	call( _free, 1, p );
+}
+
+unsigned long myDup2(int oldfd, int newfd) {
+	unsigned long ret = 0;
+	 ret = call(_dup2, 2, oldfd, newfd);
+	 return ret;
+
+}
+
+void myPipe(int pipefd[2]) {
+	call(_pipe, 1, pipefd);
 }
 
 unsigned long copyString( const char *s ) {
@@ -74,6 +90,7 @@ unsigned long copyString( const char *s ) {
 }
 
 void start_trace(pid_t pid) {
+	_pid = pid;
 	if( trace( PTRACE_ATTACH, 0, 0) != -1 ){
 		int status;
 		waitpid( _pid, &status, 0 );
@@ -82,83 +99,85 @@ void start_trace(pid_t pid) {
 			* First thing first, we need to search these functions into the target
 			* process address space.
 			*/
+		
 		_dlopen  = findFunction( "/system/bin/linker", (void *) myDlopen );
 		_dlsym   = findFunction( "/system/bin/linker", (void *) myDlsym );
-		_dlerror = findFunction( "/system/bin/linker", (void *) dlerror );
-		_calloc  = findFunction( "/system/lib/libc.so", (void *) calloc );
-		_free    = findFunction( "/system/lib/libc.so", (void *) free );
+		//_dlerror = findFunction( "/system/bin/linker", (void *) dlerror );		
+		_dup2 = findFunction( "/system/lib/libc.so", (void *) calloc );		
+		_pipe = findFunction("system/lib/libc.so", (void *) pipe);
+		_free = findFunction( "/system/lib/libc.so", (void *) free );
+		_calloc = findFunction( "/system/lib/libc.so", (void *) calloc );
 
 		if( !_calloc ){
 			fprintf( stderr, "Could not find calloc symbol.\n" );
 		}
 		else if( !_free ){
-			fprintf( stderr, "Could not find dlopen symbol.\n" );
+			fprintf( stderr, "Could not find free symbol.\n" );
 		}
-		else if( !_dlopen ){
-			fprintf( stderr, "Could not find dlopen symbol.\n" );
+		else if( !_dup2 ){
+			fprintf( stderr, "Could not find dup2 symbol.\n" );
 		}
-		else if( !_dlsym ){
-			fprintf( stderr, "Could not find dlsym symbol.\n" );
-		}
-		else if( !_dlerror ){
-			fprintf( stderr, "Could not find dlerror symbol.\n" );
+		else if( !_pipe ){
+			fprintf( stderr, "Could not find pipe symbol.\n" );
 		}
 	}
 	else {
 		fprintf( stderr, "Failed to attach to process %d.", _pid );
-	}
+	}	
 }
 
-    unsigned long call( void *function, int nargs, ... ) {
-        int i = 0;
-        struct pt_regs regs = {{0}}, rbackup = {{0}};
+unsigned long call( void *function, int nargs, ... ) {
+	int i = 0;
+	struct pt_regs regs = {{0}}, rbackup = {{0}};
 
-        // get registers and backup them
-        trace( PTRACE_GETREGS, 0, (size_t)&regs );
-        memcpy( &rbackup, &regs, sizeof(struct pt_regs) );
+	// get registers and backup them
+	trace( PTRACE_GETREGS, 0, (size_t)&regs );
+	memcpy( &rbackup, &regs, sizeof(struct pt_regs) );
 
-        va_list vl;
-        va_start(vl,nargs);
+	va_list vl;
+	va_start(vl,nargs);
 
-        for( i = 0; i < nargs; ++i ){
-            unsigned long arg = va_arg( vl, long );
+	for( i = 0; i < nargs; ++i ){
+		unsigned long arg = va_arg( vl, long );
 
-            // fill R0-R3 with the first 4 arguments
-            if( i < 4 ){
-                regs.uregs[i] = arg;
-            }
-            // push remaining params onto stack
-            else {
-                regs.ARM_sp -= sizeof(long) ;
-                write( (size_t)regs.ARM_sp, (uint8_t *)&arg, sizeof(long) );
-            }
-        }
+		// fill R0-R3 with the first 4 arguments
+		if( i < 4 ){
+			regs.uregs[i] = arg;
+		}
+		// push remaining params onto stack
+		else {
+			regs.ARM_sp -= sizeof(long) ;
+			write( (size_t)regs.ARM_sp, (uint8_t *)&arg, sizeof(long) );
+		}
+		
+	}
 
-        va_end(vl);
+	va_end(vl);
 
-        regs.ARM_lr = 0;
-        regs.ARM_pc = (long int)function;
-        // setup the current processor status register
-        if ( regs.ARM_pc & 1 ){
-            /* thumb */
-            regs.ARM_pc   &= (~1u);
-            regs.ARM_cpsr |= CPSR_T_MASK;
-        }
-        else{
-            /* arm */
-            regs.ARM_cpsr &= ~CPSR_T_MASK;
-        }
+	regs.ARM_lr = 0;
+	regs.ARM_pc = (long int)function;
+	// setup the current processor status register
+	if ( regs.ARM_pc & 1 ){
+		/* thumb */
+		regs.ARM_pc   &= (~1u);
+		regs.ARM_cpsr |= CPSR_T_MASK;
+	}
+	else{
+		/* arm */
+		regs.ARM_cpsr &= ~CPSR_T_MASK;
+	}
 
-        // do the call
-        trace( PTRACE_SETREGS, 0, (size_t)&regs );
-        trace( PTRACE_CONT, 0,0);
-        waitpid( _pid, NULL, WUNTRACED );
+	// do the call
+	trace( PTRACE_SETREGS, 0, (size_t)&regs );
+	trace( PTRACE_CONT, NULL, NULL );
+	waitpid( _pid, NULL, WUNTRACED );
 
-        // get registers again, R0 holds the return value
-        trace( PTRACE_GETREGS, 0, (size_t)&regs );
+	// get registers again, R0 holds the return value
+	trace( PTRACE_GETREGS, 0, (size_t)&regs );
 
-        // restore original registers state
-        trace( PTRACE_SETREGS, 0, (size_t)&rbackup );
+	// restore original registers state
+	trace( PTRACE_SETREGS, 0, (size_t)&rbackup );
 
-        return regs.ARM_r0;
-    }
+	return regs.ARM_r0;
+}
+

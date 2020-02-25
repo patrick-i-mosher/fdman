@@ -61,7 +61,10 @@ steque_item steque_pop(steque_t* this){
   ans = node->item;
 
   this->front = this->front->next;
-  if (this->front == NULL) this->back = NULL;
+  if (this->front == NULL) {
+	  this->back = NULL;
+  }
+  
   free(node);
 
   this->N--;

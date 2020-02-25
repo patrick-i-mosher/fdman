@@ -4,29 +4,18 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-int main(int argc, char** argv) {
-    char* path = "/home/parsons/tmp/fdtest.bin";
-    char* buf = "Written from writer\n";
-    FILE* file = NULL;
-    int fd = 0;    
-    //pid_t pid = 0;
-    
-    file = fopen(path, "w+");
-    fd = fileno(file);
-    //pid = getpid();
+int main(int argc, char** argv) {    
+    // Writes message to stdout then sleeps
+    int pid = getpid();
+    FILE* file = fopen("/home/parsons/Dev/out.txt", "w+");
+    void * ptr = (void*)&dup2;
+    printf("My dup2 address: %p\n",ptr);
     while(1) {
-        printf("PID: %d :: Open FD: %d\n", getpid(), fd);       
-        if (write(fd, buf, strlen(buf)) <= 0) {
-            // failed to write to file
-            if(fd == 01){
-                perror("Failed to write to file: ");
-            }    
-            else {
-                printf("Wrote to file");
-            }    
-        return 1;
-    }
-
+        // do a write from stdout
+        printf("PID: %d\n", pid);
+        // do a read from stdin       
         sleep(1);
     }
+    close(fileno(file));
+    
 }

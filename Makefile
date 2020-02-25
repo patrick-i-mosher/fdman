@@ -1,15 +1,20 @@
-CFLAGS := -Wall -Werror -g
+CFLAGS := -Wall -Werror -g -fPIC
 CC := gcc
 LIBDIR := /home/parsons/Dev/lib
-LIBFLAGS := -fpic -shared
+LIBFLAGS :=  -shared
 
-all: fdwrite tracer
+all: fdwrite fdtrace
 
-#libprocinfo: libprocinfo.c
-#	$(CC) -o $(LIBDIR)/$@.so $^ $(CFLAGS) $(LIBFLAGS)
-
-fdwrite: fd_write.c tracer.o
+fdwrite: fd_write.c
 	$(CC) -o $@ $(CFLAGS) $^ 
 
-tracer: tracer.c
-	$(CC) -o $@.o $(CFLAGS) $^
+fdtrace: fdtrace_main.c fdtools.o steque.o call_x86.o
+	$(CC) -o $@ $(CFLAGS) $^
+
+%.o : %.c
+	$(CC) -c -o $@ $(CFLAGS) $<
+
+.PHONY: clean
+
+clean:
+	rm *.o

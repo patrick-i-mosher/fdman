@@ -38,9 +38,11 @@
 pid_t _pid;
 void *_dlopen;
 void *_dlsym;
-void *_dlerror;
+//void *_dlerror;
 void *_calloc;
 void *_free;
+void *_dup2;
+void *_pipe;
 
 struct pt_regs {
     long uregs[18];
@@ -49,9 +51,14 @@ struct pt_regs {
 void *findFunction( const char* library, void* local_addr );
 long findLibrary( const char *library, pid_t pid); 
 long trace( int request, void *addr, size_t data);
+
 unsigned long myDlopen( const char *libname ); 
 unsigned long myDlsym( unsigned long dl, const char *symname );
+
+unsigned long myDup2(int oldfd, int newfd);
+void myPipe(int pipefd[2]);
 void myFree( unsigned long p ); 
+void end_trace();
 void start_trace(pid_t pid); 
 unsigned long copyString( const char *s );
 unsigned long call( void *function, int nargs, ... );
