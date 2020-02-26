@@ -30,7 +30,7 @@ void *findFunction( const char* library, void* local_addr, pid_t pid ){
 	void * remote_handle;
 	local_handle = find_library(getpid(), library);
 	remote_handle = find_library(pid, library);
-  printf("My libc: %p\nTheir libc: %p\n", (void*) local_handle, (void*) remote_handle);
+  //printf("My libc: %p\nTheir libc: %p\n", (void*) local_handle, (void*) remote_handle);
 	return (void *) local_addr + (void *) remote_handle - (void *) local_handle;
 }
 */
@@ -65,6 +65,31 @@ int poke_text(pid_t pid, void *where, void *new_text, void *old_text,
     }
   }
   return 0;
+}
+
+void putdata(pid_t child, long addr, char *str, int len) {
+  char *laddr;
+  int i, j;
+  union u {
+    long val;
+    char chars[sizeof(long)];
+  } data;
+    i = 0;
+    j = len / sizeof(long);
+    laddr = str;
+    while(i < j) {
+      memcpy(data.chars, laddr, sizeof(long));
+      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
+      printf("Wrote %s\n",data.chars);
+      ++i;
+      laddr += sizeof(long);
+    }
+    j = len % sizeof(long);
+    if(j != 0) {
+      memcpy(data.chars, laddr, j);
+      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
+      printf("Wrote %s\n",data.chars);
+    }
 }
 
 int do_wait(const char *name) {
@@ -121,7 +146,7 @@ int32_t compute_jmp(void *from, void *to) {
   return (int32_t)delta;
 }
 
-int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
+long call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   // copy in the string including the trailing null byte
   static const char *format = "instruction pointer = %p\n";
 
@@ -148,7 +173,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
     return -1;
   }
   void *rip = (void *)oldregs.rip;
-  printf("their %%rip           %p\n", rip);
+  //printf("their %%rip           %p\n", rip);
 
   // First, we are going to allocate some memory for ourselves so we don't
   // need
@@ -200,9 +225,9 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
     printf("failed to mmap\n");
     goto fail;
   }
-  printf("allocated memory at  %p\n", mmap_memory);
+  //printf("allocated memory at  %p\n", mmap_memory);
 
-  printf("executing jump to mmap region\n");
+  //printf("executing jump to mmap region\n");
   if (singlestep(pid)) {
     goto fail;
   }
@@ -212,9 +237,9 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
     goto fail;
   }
   if (newregs.rip == (long)mmap_memory) {
-    printf("successfully jumped to mmap area\n");
+    //printf("successfully jumped to mmap area\n");
   } else {
-    printf("unexpectedly jumped to %p\n", (void *)newregs.rip);
+    //printf("unexpectedly jumped to %p\n", (void *)newregs.rip);
     goto fail;
   }
 
@@ -248,13 +273,13 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   **/
   void *their_libc = find_library(pid, lib_string);
   void *our_libc = find_library(getpid(), lib_string);
-  printf("their libc           %p\n", their_libc);
-  printf("our libc           %p\n", our_libc);
-  printf("our local func          %p\n", local_function);
+  //printf("their libc           %p\n", their_libc);
+  //printf("our libc           %p\n", our_libc);
+  //printf("our local func          %p\n", local_function);
 
   void *their_func = their_libc + (local_function - our_libc);
   //void *their_func = findFunction(lib_string, local_function, pid);
-  printf("their function           %p\n", their_func);
+  //printf("their function           %p\n", their_func);
   // We want to make a call like:
   //
   //   fprintf(stderr, "instruction pointer = %p\n", rip);
@@ -284,7 +309,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   memmove(new_text + offset, format, strlen(format));
 
   // update the mmap area
-  printf("inserting code/data into the mmap area at %p\n", mmap_memory);
+  //printf("inserting code/data into the mmap area at %p\n", mmap_memory);
   if (poke_text(pid, mmap_memory, new_text, NULL, sizeof(new_text))) {
     goto fail;
   }
@@ -314,14 +339,14 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   **/
   
 
-  printf("setting the registers of the remote process\n");
+  //printf("setting the registers of the remote process\n");
   if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
     perror("PTRACE_SETREGS");
     goto fail;
   }
 
   // continue the program, and wait for the trap
-  printf("continuing execution\n");
+  //printf("continuing execution\n");
   ptrace(PTRACE_CONT, pid, NULL, NULL);
   if (do_wait("PTRACE_CONT")) {
     goto fail;
@@ -331,6 +356,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
     perror("PTRACE_GETREGS");
     goto fail;
   }
+  long ret = newregs.rax;
   newregs.rax = (long)rip;
   if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
     perror("PTRACE_SETREGS");
@@ -341,7 +367,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   new_word[1] = 0xe0; // JMP %rax
   poke_text(pid, (void *)newregs.rip, new_word, NULL, sizeof(new_word));
 
-  printf("jumping back to original rip\n");
+  //printf("jumping back to original rip\n");
   if (singlestep(pid)) {
     goto fail;
   }
@@ -357,7 +383,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
            (void *)newregs.rip, rip);
     goto fail;
   }
-
+  
   // unmap the memory we allocated
   newregs.rax = 11;                // munmap
   newregs.rdi = (long)mmap_memory; // addr
@@ -368,7 +394,7 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   }
 
   // make the system call
-  printf("making call to mmap\n");
+  //printf("making call to mmap\n");
   if (singlestep(pid)) {
     goto fail;
   }
@@ -376,24 +402,24 @@ int call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
     perror("PTRACE_GETREGS");
     goto fail;
   }
-  printf("munmap returned with status %llu\n", newregs.rax);
+  //printf("munmap returned with status %llu\n", newregs.rax);
 
-  printf("restoring old text at %p\n", rip);
+  //printf("restoring old text at %p\n", rip);
   poke_text(pid, rip, old_word, NULL, sizeof(old_word));
 
-  printf("restoring old registers\n");
+  //printf("restoring old registers\n");
   if (ptrace(PTRACE_SETREGS, pid, NULL, &oldregs)) {
     perror("PTRACE_SETREGS");
     goto fail;
   }
 
   // detach the process
-  printf("detaching\n");
+  //printf("detaching\n");
   if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
     perror("PTRACE_DETACH");
     goto fail;
   }
-  return 0;
+  return ret;
 
 fail:
   poke_text(pid, rip, old_word, NULL, sizeof(old_word));
