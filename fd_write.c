@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -9,26 +10,45 @@
 
 int main(int argc, char** argv) {    
     // Writes message to stdout then sleeps
-    int pid = getpid();
-    FILE* file = fopen("/home/parsons/Dev/out.txt", "w+");
-    void * ptr = (void*)&dup2;
-    
-    //int p[2];
-    //pipe(p);
-    printf("My dup2 address: %p\n",ptr);
-    while(1) {
-        // do a write from stdout
+    int pid = getpid();    
+    int fd = open("/dev/pts/6", O_NONBLOCK | O_RDWR);
+    if(fd == -1) {
+        perror("Error opening file");
+        return 1;
+    }
+    printf("obtained handle with fd %d\n", fd);
+    char * buf = malloc(20);
+    char * buf2 = malloc(20);    
+    printf("PID: %d\n", pid);
+    while(1) {        
         if(errno) {
             perror("Error:");
             errno = 0;
         }
         else {
-            printf("PID: %d\n", pid);
+            // write to file
+            printf("Writing to fd %d\n", fd);            
+            snprintf(buf, 20, "PID: %d\n", pid);            
+            if(write(fd, buf, 20) == -1) {
+                perror("Write error");
+                errno = 0;
+            }
+            // read from file and print to stdout
+            if(read(fd, buf2, 20) == -1){
+                if(errno != EWOULDBLOCK) {
+                    perror("Read Error");
+                }
+                errno = 0;
+            }
+            else {
+                printf("Read from file: %s\n", buf2);
+            }
+            
         }
         
         // do a read from stdin       
         sleep(1);
     }
-    close(fileno(file));
+    close(fd);
     
 }

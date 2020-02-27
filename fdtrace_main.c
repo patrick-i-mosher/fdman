@@ -65,28 +65,22 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "must specify a remote process with -p\n");
 		return 1;
 	}
-	steque_t queue;	
-	char * target_file = "/dev/pts/2"; // my test terminal
-	//enum { pipe_read, pipe_write};
-	char * read_fifo_path = "/tmp/read_pipe";
-	char * write_fifo_path = "/tmp/write_pipe";
-	if(mkfifo(read_fifo_path, 0666) == -1) {
+	steque_t queue;
+	steque_t target_file_q;	
+	char * target_file = "/dev/pts/6"; // my test terminal
+	
+	char * fifo_path = "/tmp/read_pipe";
+	
+	if(mkfifo(fifo_path, 0666) == -1) {
 		// local process will read from this pipe
-		perror("Error creating read FIFO: ");
+		perror("Error creating FIFO: ");
 		if(errno != EEXIST) {
 			return 1;
-		}
-		
-	} 
-	if(mkfifo(write_fifo_path, 0666) == -1) {
-		// local process will write to this pipe	
-		perror("Error creating write FIFO: ");
-		if(errno != EEXIST) {
-			return 1;
-		}
+		}		
 	} 
 	DIR * dir = NULL;			
 	steque_init(&queue);
+	steque_init(&target_file_q);
 	// enumerate target process' open file descriptors
 	char proc_path[PATH_MAX];
 	snprintf(proc_path, PATH_MAX, "/proc/%ld/fd", pid);
@@ -101,6 +95,9 @@ int main(int argc, char** argv) {
 		char * temp = NULL;
 		temp = steque_pop(&queue);
 		printf("Following file open: %s\n", temp);
+		if (strcmp(temp, target_file) == 0) {
+			steque_enqueue(&target_file_q);
+		}
 		free(temp);		
 	}
 	closedir(dir);
@@ -110,41 +107,26 @@ int main(int argc, char** argv) {
 	
 	// First allocate memory in remote process to store fifo path
 	void * ptr = (void *)&calloc;
-	long remote_read_addr = call(pid, LIB_C_STR, ptr, 2, 1, strlen(read_fifo_path));
-	printf("Allocated memory at %p for read path\n", (void *) remote_read_addr);
-	printf("Address of local read path string is %p\n",&read_fifo_path);
+	long remote_read_addr = call(pid, LIB_C_STR, ptr, 2, 1, strlen(fifo_path) +1);
+	printf("Allocated memory at %p for FIFO path\n", (void *) remote_read_addr);
+	printf("Address of local FIFO path string is %p\n",&fifo_path);	
 	// Write our string to the remotely allocated memory
 	
 	ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-	waitpid(pid, 0, WSTOPPED);
-	//putdata(pid_t child, long addr,
-             //char *str, int len)
-	putdata(pid, remote_read_addr, read_fifo_path, strlen(read_fifo_path) +1);
-
-	//if(ptrace(PTRACE_POKEDATA, pid, (void*) remote_read_addr, (void *)read_fifo_path) == -1){
-	//	perror("Unable to poke data");
-	//}	
+	waitpid(pid, 0, WSTOPPED);	
+	putdata(pid, remote_read_addr, fifo_path, strlen(fifo_path) +1);	
 	ptrace(PTRACE_DETACH, pid, NULL, NULL);
 	
-	long res = ptrace(PTRACE_PEEKDATA, remote_read_addr, NULL);
-	printf("Peek results: 0x%lX\n", res);	
-	// do it again for the other pipe
-	long remote_write_addr = call(pid, LIB_C_STR, ptr, 2, 1, strlen(write_fifo_path));
-	printf("Allocated memory at %p for write path\n", (void *) remote_write_addr);
-	//ptrace(PTRACE_POKEDATA, pid, (void*) remote_write_addr, write_fifo_path);
-	// DEBUG
-	
-	
 	// Make the calls to open()
-	int local_read_fd = open(read_fifo_path, O_RDONLY | O_NONBLOCK);
-	int local_write_fd = open(write_fifo_path, O_WRONLY | O_NONBLOCK);
-	printf("Opened local handles to pipes: %d and %d\n",local_read_fd, local_write_fd);
 	ptr = (void *)&open;
-	long remote_read_fd = call(pid, LIB_C_STR, ptr, 2, remote_read_addr, O_WRONLY);  // will read locally, write remotely
-	printf("Opened read_pipe with fd %ld\n", remote_read_fd);
-	long remote_write_fd = call(pid, LIB_C_STR, ptr, 2, remote_write_addr, O_RDONLY); // will write locally, read remotely
-	printf("Opened write_pipe with fd %ld\n", remote_write_fd);
-
+	int local_fd = open(fifo_path, O_RDONLY | O_NONBLOCK);
+	if (local_fd == -1) {
+		perror("Error opening local read");
+		return 1;
+	}
+	long remote_fd = call(pid, LIB_C_STR, ptr, 2, remote_read_addr, O_WRONLY);  // will read locally, write remotely
+	printf("Opened remote pipe with fd %ld\n", remote_fd);
+	printf("Opened local handle to pipe: %d\n",local_fd);	
 	// Check open file descriptors again to verify pipe creation
 	dir = opendir(proc_path);
 	if(!dir) {
@@ -164,23 +146,7 @@ int main(int argc, char** argv) {
 	// for now, for testing, we are going to re-direct victim's stdout to another file it has open, fd 3
 	ptr = (void*)&dup2;
 	printf("My dup2: %p\n",ptr);
-	call(pid, "/libc-2", ptr, 2, 3, 1);
-
-	//fprintf_process(pid);
-	// attach to target process
-	//start_trace(target_pid);
-	
-
-	/**
-	int newfd = myDup2(3,4);
-	char buf[1024] = {0};
-	read(4, &buf, 1024);
-	printf("new fd: %d, buf: %s\n",newfd, buf);
-	end_trace();	
-**/
-	// replace targeted fd(s)
-	// read / write as desired.
-	// clean up / free mallocs
+	call(pid, "/libc-2", ptr, 2, 3, 1);	
 	return 0;
 }
 
