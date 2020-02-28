@@ -13,7 +13,7 @@
 #include "steque.h"
 
 
-void scan_fd(DIR * dir, steque_t * queue, int target_pid);
+void scan_fd(DIR * dir, steque_t * queue, int target_pid, char * target_file);
 
 
 
