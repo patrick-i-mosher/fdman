@@ -67,9 +67,8 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 	steque_t queue;
-	steque_t target_file_q;	
-	char * target_file = "/dev/pts/4"; // my test terminal
-	
+	steque_t target_file_q;		
+	char * target_file = "/home/parsons/tmp/fdtest"; // my test terminal
 	char * fifo_path = "/tmp/read_pipe";
 	
 	if(mkfifo(fifo_path, 0666) == -1) {
@@ -90,41 +89,40 @@ int main(int argc, char** argv) {
 		perror("Unable to open target directory");
 		return 1;
 	}
-	// identify fd(s) to replace with dup2
-	/**
-	scan_fd(dir, &queue, pid, target_file);	
-	while(!steque_isempty(&queue)) {
-		int * temp = NULL;
-		temp = steque_pop(&queue);
-		printf("Handle to %s: %d\n", target_file, *temp);		
-		free(temp);		
-	}
-	closedir(dir);	
-	**/
 	// Call open() in remote process to get handles to our named pipes
 	
 	// First allocate memory in remote process to store fifo path
-	void * ptr = (void *)&calloc;
-	long remote_read_addr = call(pid, LIB_C_STR, ptr, 2, 1, strlen(fifo_path) +1);
-	printf("Allocated memory at %p for FIFO path\n", (void *) remote_read_addr);
+	void * dup2_ptr = (void *)&dup2;
+	void * close_ptr = (void *)&close;
+	void * open_ptr = (void *)&open;
+	void * write_ptr = (void *)&write;
+	void * calloc_ptr = (void *)&calloc;
+
+	long remote_fifo_str_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(fifo_path) +1);
+	// We also need to gain a new handle to the file we dup'd 
+	long remote_target_str_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(target_file) +1);
+	printf("Allocated memory at %p for FIFO path\n", (void *) remote_fifo_str_addr);
 	printf("Address of local FIFO path string is %p\n",&fifo_path);	
 	// Write our string to the remotely allocated memory
 	
 	ptrace(PTRACE_ATTACH, pid, NULL, NULL);
 	waitpid(pid, 0, WSTOPPED);	
-	putdata(pid, remote_read_addr, fifo_path, strlen(fifo_path) +1);	
+	putdata(pid, remote_fifo_str_addr, fifo_path, strlen(fifo_path) +1);	
+	putdata(pid, remote_target_str_addr, target_file, strlen(target_file) + 1);
 	ptrace(PTRACE_DETACH, pid, NULL, NULL);
-	
+		
 	// Make the calls to open()
-	ptr = (void *)&open;
+	
 	int local_fd = open(fifo_path, O_RDWR | O_NONBLOCK);
 	if (local_fd == -1) {
 		perror("Error opening local read");
 		return 1;
 	}
-	long remote_fd = call(pid, LIB_C_STR, ptr, 2, remote_read_addr, O_RDWR);
-	printf("Opened remote pipe with fd %ld\n", remote_fd);
+	long remote_proxy_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_fifo_str_addr, O_RDWR);	
+	printf("Opened remote pipe with fd %ld\n", remote_proxy_fd);
 	printf("Opened local handle to pipe: %d\n",local_fd);	
+	long remote_new_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_target_str_addr, O_RDWR);
+	printf("Acquired handle to original file with FD %ld\n", remote_new_fd);
 	// Check open file descriptors again to verify pipe creation
 	dir = opendir(proc_path);
 	if(!dir) {
@@ -133,46 +131,57 @@ int main(int argc, char** argv) {
 	}
 	scan_fd(dir, &queue, pid, target_file);	
 	printf("Found %d open file descriptors\n",steque_size(&queue));
-	ptr = (void*)&dup2;	
+		
 	while(!steque_isempty(&queue)) {
 		int * temp = NULL;
-		temp = steque_pop(&queue);
-		//printf("Handle to %s: %d\n", target_file, *temp);		
-		// redirect output from the original target file to the named pipe
-		call(pid, "/libc-2", ptr, 2, remote_fd, *temp);	
+		temp = steque_pop(&queue);		
+		call(pid, LIB_C_STR, dup2_ptr, 2, remote_proxy_fd, *temp);			
 		free(temp);		
 	}
 	closedir(dir);
-	int target_fd = open(target_file, O_RDWR);	
+	//int target_fd = open(target_file, O_RDWR);	
 	struct pollfd pfd[1];
 	pfd[0].fd = local_fd;
 	pfd[0].events = POLLIN;	
 	char read_buf[1024];
-	char proxied_write[1024];
-	char write_buf[] = "I'm up in yo guts\n";
+	char proxied_write[1024] = {0};
+	//char write_buf[] = "Modified read\n";
+
 	while(1) {		
 		poll(pfd, 1, -1);
 		switch(pfd[0].revents) {
 			// intercept writes and return our own data
 			case POLLIN:
 				// remote write event
+				pfd[0].events = POLLIN;				
 				read(local_fd, read_buf, 1024);
-				printf("Caught remote write operations: %s\n",read_buf);	
-				// Write our own data to the target file instead
-				snprintf(proxied_write, 1024, "Intercepted write: %s\n",read_buf);
-				write(target_fd, proxied_write, strlen(proxied_write) + 1);
-				write(local_fd, write_buf, strlen(write_buf) + 1);
+				printf("Caught remote write operation: %s\n",read_buf);								
+				snprintf(proxied_write, 1024, "Intercepted write: %s\n",read_buf);				
+				// set up the modified write to the underlying file				
+				// allocate memory to hold modified data
+				long remote_data_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(proxied_write) + 1);
+				ptrace(PTRACE_ATTACH, pid, NULL, NULL);
+				waitpid(pid, 0, WSTOPPED);					
+				putdata(pid, remote_data_addr, proxied_write, strlen(proxied_write) + 1);
+				ptrace(PTRACE_DETACH, pid, NULL, NULL);
+				// close the pipe fd so we can get a new handle to the target file
+				call(pid, LIB_C_STR, close_ptr, 1, remote_proxy_fd);								
+				int temp_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_target_str_addr, O_RDWR);				
+				call(pid, LIB_C_STR, write_ptr, 3, temp_fd, remote_data_addr, strlen(proxied_write));
+				int new_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_fifo_str_addr, O_RDWR | O_NONBLOCK);				
+				call(pid, LIB_C_STR, dup2_ptr, 2,  temp_fd, new_fd);				
+				call(pid, LIB_C_STR, close_ptr, 1, new_fd);								
 				sleep(1);
-				bzero(read_buf, 1024);
+				bzero(read_buf, 1024);				
 				break;
 			// detect read attempt and write to the fifo
+			/**
 			case POLLOUT:
-				printf("Caugh read attempt\n");
+				printf("Caught read attempt\n");
 				write(local_fd, write_buf, strlen(write_buf) + 1);
 				break;
-			default:
-				// POLLERR
-				//perror("Poll error");
+				**/
+			default:				
 				break;
 		}
 

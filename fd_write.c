@@ -9,57 +9,88 @@
 #include <poll.h>
 #include <unistd.h>
 
-int main(int argc, char** argv) {    
+void do_write() {
     // Writes message to stdout then sleeps
-    int pid = getpid();    
-    int fd = open("/dev/pts/4", O_NONBLOCK | O_RDWR);
+    int ctr = 0;    
+    
+    int fd = open("/home/parsons/tmp/fdtest", O_NONBLOCK | O_WRONLY);
+    //int read_fd = open("/dev/urandom", O_RDONLY);
     if(fd == -1) {
         perror("Error opening file");
-        return 1;
+        return;
     }
     
     printf("obtained handle with fd %d\n", fd);
-    char * buf = malloc(20);
-    char * buf2 = malloc(20);    
-    //struct pollfd pfd[1];
-	//pfd[0].fd = fd;
-	//pfd[0].events = POLLIN;	
-    printf("PID: %d\n", pid);
+    char * buf = malloc(20);    
     while(1) {        
         if(errno) {
-            perror("Error:");
+            perror("Error");
+            printf("FD: %d\n",fd);
             errno = 0;
         }
         else {
-            // write to file
-            
             printf("Writing to fd %d\n", fd);            
-            snprintf(buf, 20, "PID: %d\n", pid);            
-            if(write(fd, buf, 20) == -1) {
-                perror("Write error");
+            snprintf(buf, 20, "PID: %d\n", ctr);            
+            if(write(fd, buf, strlen(buf)) == -1) {
+                char err_str[1024] = {0};
+                snprintf(err_str, 1024, "Write error fd %d", fd);
+                perror(err_str);
                 errno = 0;
             }
+            sleep(1);            
+        }
+        ctr++;  
+    }
+    close(fd);
+    //close(read_fd);
+    free(buf);    
+}
+
+void do_read() {
+    int fd = open("/home/parsons/tmp/fdtest", O_RDONLY);
+    //int read_fd = open("/dev/urandom", O_RDONLY);
+    if(fd == -1) {
+        perror("Error opening file");
+        return;
+    }
+    
+    printf("obtained handle with fd %d\n", fd);
+    char * buf = malloc(20);        
+    while(1) {        
+        if(errno) {
+            perror("Error");
+            errno = 0;
+        }
+        else {       
             
-            // read from file and print to stdout
-            // wait for a response
-            //poll(pfd, 1, 1000);
-            sleep(1);
-            if(read(fd, buf2, 20) == -1){
-                if(errno != EWOULDBLOCK) {
-                    perror("Read Error");
-                }
+            if(read(fd, buf, 20) == -1){
+                perror("Read Error");                
                 errno = 0;
             }
             else {
-                printf("Read from file: %s\n", buf2);
+                printf("Read from file: %s\n", buf);
             }
-            
-            
         }
         
         // do a read from stdin       
         sleep(1);
     }
     close(fd);
+    //close(read_fd);
+    free(buf);   
+}
+
+int main(int argc, char** argv) {    
     
+    int pid = getpid();
+    printf("PID: %d\n", pid);
+
+    // big brain arg parsing
+    if(strcmp(argv[1], "w") == 0) {
+        do_write();
+    }
+    else {
+        do_read();
+    }
+    return 1;
 }

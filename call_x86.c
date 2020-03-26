@@ -80,7 +80,7 @@ void putdata(pid_t child, long addr, char *str, int len) {
     while(i < j) {
       memcpy(data.chars, laddr, sizeof(long));
       ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
-      printf("Wrote %s\n",data.chars);
+      //printf("Wrote %s\n",data.chars);
       ++i;
       laddr += sizeof(long);
     }
@@ -88,7 +88,7 @@ void putdata(pid_t child, long addr, char *str, int len) {
     if(j != 0) {
       memcpy(data.chars, laddr, j);
       ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
-      printf("Wrote %s\n",data.chars);
+      //printf("Wrote %s\n",data.chars);
     }
 }
 
@@ -377,10 +377,10 @@ long call(pid_t pid, char *lib_string, void *local_function, int nargs, ...) {
   }
 
   if (newregs.rip == (long)rip) {
-    printf("successfully jumped back to original %%rip at %p\n", rip);
+    //printf("successfully jumped back to original %%rip at %p\n", rip);
   } else {
-    printf("unexpectedly jumped to %p (expected to be at %p)\n",
-           (void *)newregs.rip, rip);
+    //printf("unexpectedly jumped to %p (expected to be at %p)\n",
+    //       (void *)newregs.rip, rip);
     goto fail;
   }
   
