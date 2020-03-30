@@ -1,6 +1,6 @@
-
 #include <getopt.h>
 #include <stdio.h>
+#include <linux/ptrace.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -33,33 +33,33 @@ int main(int argc, char** argv) {
 	while ((c = getopt_long(argc, argv, "hp:", gLongOptions, NULL)) != -1) {
 		switch (c) {
 		case 'h':
-		printf("Usage: %s -p <pid>\n", argv[0]);
-		return 0;
-		break;
+			printf("Usage: %s -p <pid>\n", argv[0]);
+			return 0;
+			break;
 		case 'p':
-		pid = strtol(optarg, NULL, 10);
-		if ((errno == ERANGE && (pid == LONG_MAX || pid == LONG_MIN)) ||
-			(errno != 0 && pid == 0)) {
-			perror("strtol");
-			return 1;
-		}
-		if (pid < 0) {
-			fprintf(stderr, "cannot accept negative pids\n");
-			return 1;
-		}
-		break;
+			pid = strtol(optarg, NULL, 10);
+			if ((errno == ERANGE && (pid == LONG_MAX || pid == LONG_MIN)) ||
+				(errno != 0 && pid == 0)) {
+				perror("strtol");
+				return 1;
+			}
+			if (pid < 0) {
+				fprintf(stderr, "cannot accept negative pids\n");
+				return 1;
+			}
+			break;
 		case '?':
-		if (optopt == 'p') {
-			fprintf(stderr, "Option -p requires an argument.\n");
-		} else if (isprint(optopt)) {
-			fprintf(stderr, "Unknown option `-%c`.\n", optopt);
-		} else {
-			fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
-		}
-		return 1;
-		break;
-		default:
-		abort();
+			if (optopt == 'p') {
+				fprintf(stderr, "Option -p requires an argument.\n");
+			} else if (isprint(optopt)) {
+				fprintf(stderr, "Unknown option `-%c`.\n", optopt);
+			} else {
+				fprintf(stderr, "Unknown option character `\\x%x'.\n", optopt);
+			}
+			return 1;
+			break;
+			default:
+			abort();
 		}
 	}
 	if (pid == -1) {
@@ -145,9 +145,13 @@ int main(int argc, char** argv) {
 	pfd[0].events = POLLIN;	
 	char read_buf[1024];
 	char proxied_write[1024] = {0};
-	//char write_buf[] = "Modified read\n";
-
+	//char write_buf[] = "Modified read\n";	
+	//struct ptrace_syscall_info * syscall_info = malloc(sizeof(struct ptrace_syscall_info));
 	while(1) {		
+		ptrace(PTRACE_SYSCALL, pid, 0, 0);
+		waitpid(pid, 0, WSTOPPED);
+
+
 		poll(pfd, 1, -1);
 		switch(pfd[0].revents) {
 			// intercept writes and return our own data

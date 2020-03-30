@@ -1,6 +1,58 @@
 #ifndef CALL_X86_H
 #define CALL_X86_H
 
+// Resolve conflicts between sys/ptrace.h and linux/ptrace.h
+#ifdef _LINUX_PTRACE_H
+# undef PTRACE_TRACEME
+# undef PTRACE_O_TRACESYSGOOD
+# undef PTRACE_EVENT_FORK
+# undef PTRACE_PEEKSIGINFO_SHARED
+# undef PTRACE_PEEKTEXT
+# undef PTRACE_EVENT_VFORK
+# undef PTRACE_PEEKDATA
+# undef PTRACE_O_TRACEFORK
+# undef PTRACE_EVENT_CLONE
+# undef PTRACE_POKETEXT
+# undef PTRACE_O_TRACEVFORK
+# undef PTRACE_EVENT_EXEC
+# undef PTRACE_POKEDATA
+# undef PTRACE_O_TRACECLONE
+# undef PTRACE_EVENT_VFORK_DONE
+# undef PTRACE_CONT
+# undef PTRACE_O_TRACEEXEC
+# undef PTRACE_EVENT_EXIT
+# undef PTRACE_KILL
+# undef PTRACE_O_TRACEVFORKDONE
+# undef PTRACE_SINGLESTEP
+# undef PTRACE_O_TRACEEXIT
+# undef PTRACE_GETREGS
+# undef PTRACE_O_TRACESECCOMP
+# undef PTRACE_SETREGS
+# undef PTRACE_O_MASK
+# undef PTRACE_GETFPREGS
+# undef PTRACE_SETFPREGS
+# undef PTRACE_ATTACH
+# undef PTRACE_DETACH
+# undef PTRACE_GETFPXREGS
+# undef PTRACE_SETFPXREGS
+# undef PTRACE_SYSCALL
+# undef PTRACE_SETOPTIONS
+# undef PTRACE_GETEVENTMSG      
+# undef PTRACE_GETSIGINFO       
+# undef PTRACE_SETSIGINFO
+# undef PTRACE_GETREGSET        
+# undef PTRACE_SETREGSET        
+# undef PTRACE_SEIZE            
+# undef PTRACE_INTERRUPT        
+# undef PTRACE_LISTEN           
+# undef PTRACE_PEEKSIGINFO
+# undef PTRACE_GETSIGMASK       
+# undef PTRACE_SETSIGMASK     
+# undef PTRACE_SECCOMP_GET_FILTER       
+
+       
+#endif
+
 #include <stdarg.h>
 #include <assert.h>
 #include <ctype.h>
@@ -14,6 +66,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <sys/ptrace.h>
+
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/user.h>
