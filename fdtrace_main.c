@@ -3,6 +3,8 @@
 #include <linux/ptrace.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/user.h>
 #include <fcntl.h>
 #include <poll.h>
 #include "steque.h"
@@ -69,15 +71,7 @@ int main(int argc, char** argv) {
 	steque_t queue;
 	steque_t target_file_q;		
 	char * target_file = "/home/parsons/tmp/fdtest"; // my test terminal
-	char * fifo_path = "/tmp/read_pipe";
 	
-	if(mkfifo(fifo_path, 0666) == -1) {
-		// local process will read from this pipe
-		perror("Error creating FIFO: ");
-		if(errno != EEXIST) {
-			return 1;
-		}		
-	} 
 	DIR * dir = NULL;			
 	steque_init(&queue);
 	steque_init(&target_file_q);
@@ -89,40 +83,8 @@ int main(int argc, char** argv) {
 		perror("Unable to open target directory");
 		return 1;
 	}
-	// Call open() in remote process to get handles to our named pipes
+	// Call open() in remote process to get handles to our named pipes	
 	
-	// First allocate memory in remote process to store fifo path
-	void * dup2_ptr = (void *)&dup2;
-	void * close_ptr = (void *)&close;
-	void * open_ptr = (void *)&open;
-	void * write_ptr = (void *)&write;
-	void * calloc_ptr = (void *)&calloc;
-
-	long remote_fifo_str_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(fifo_path) +1);
-	// We also need to gain a new handle to the file we dup'd 
-	long remote_target_str_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(target_file) +1);
-	printf("Allocated memory at %p for FIFO path\n", (void *) remote_fifo_str_addr);
-	printf("Address of local FIFO path string is %p\n",&fifo_path);	
-	// Write our string to the remotely allocated memory
-	
-	ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-	waitpid(pid, 0, WSTOPPED);	
-	putdata(pid, remote_fifo_str_addr, fifo_path, strlen(fifo_path) +1);	
-	putdata(pid, remote_target_str_addr, target_file, strlen(target_file) + 1);
-	ptrace(PTRACE_DETACH, pid, NULL, NULL);
-		
-	// Make the calls to open()
-	
-	int local_fd = open(fifo_path, O_RDWR | O_NONBLOCK);
-	if (local_fd == -1) {
-		perror("Error opening local read");
-		return 1;
-	}
-	long remote_proxy_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_fifo_str_addr, O_RDWR);	
-	printf("Opened remote pipe with fd %ld\n", remote_proxy_fd);
-	printf("Opened local handle to pipe: %d\n",local_fd);	
-	long remote_new_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_target_str_addr, O_RDWR);
-	printf("Acquired handle to original file with FD %ld\n", remote_new_fd);
 	// Check open file descriptors again to verify pipe creation
 	dir = opendir(proc_path);
 	if(!dir) {
@@ -131,63 +93,88 @@ int main(int argc, char** argv) {
 	}
 	scan_fd(dir, &queue, pid, target_file);	
 	printf("Found %d open file descriptors\n",steque_size(&queue));
-		
+	int target_fd;
 	while(!steque_isempty(&queue)) {
 		int * temp = NULL;
-		temp = steque_pop(&queue);		
-		call(pid, LIB_C_STR, dup2_ptr, 2, remote_proxy_fd, *temp);			
+		temp = steque_pop(&queue);				
+		target_fd = *temp;
 		free(temp);		
 	}
 	closedir(dir);
 	//int target_fd = open(target_file, O_RDWR);	
-	struct pollfd pfd[1];
-	pfd[0].fd = local_fd;
-	pfd[0].events = POLLIN;	
-	char read_buf[1024];
-	char proxied_write[1024] = {0};
-	//char write_buf[] = "Modified read\n";	
-	//struct ptrace_syscall_info * syscall_info = malloc(sizeof(struct ptrace_syscall_info));
-	while(1) {		
-		ptrace(PTRACE_SYSCALL, pid, 0, 0);
+	//struct pollfd pfd[1];
+	//pfd[0].fd = local_fd;
+	//pfd[0].events = POLLIN;	
+	//char read_buf[1024];
+	//char proxied_write[1024] = {0};
+	//char write_buf[] = "Modified read\n";		
+	struct user_regs_struct regs;
+	//struct ptrace_syscall_info syscall_info;
+	ptrace(PTRACE_ATTACH, pid, 0, 0);
+	waitpid(pid, 0, WSTOPPED);
+	printf("Waiting for syscall\n");
+		if(ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
+			perror("Error getting system call");
+			printf("Errno: %d\n",errno);			
+		}
 		waitpid(pid, 0, WSTOPPED);
-
-
-		poll(pfd, 1, -1);
-		switch(pfd[0].revents) {
-			// intercept writes and return our own data
-			case POLLIN:
-				// remote write event
-				pfd[0].events = POLLIN;				
-				read(local_fd, read_buf, 1024);
-				printf("Caught remote write operation: %s\n",read_buf);								
-				snprintf(proxied_write, 1024, "Intercepted write: %s\n",read_buf);				
-				// set up the modified write to the underlying file				
-				// allocate memory to hold modified data
-				long remote_data_addr = call(pid, LIB_C_STR, calloc_ptr, 2, 1, strlen(proxied_write) + 1);
-				ptrace(PTRACE_ATTACH, pid, NULL, NULL);
-				waitpid(pid, 0, WSTOPPED);					
-				putdata(pid, remote_data_addr, proxied_write, strlen(proxied_write) + 1);
-				ptrace(PTRACE_DETACH, pid, NULL, NULL);
-				// close the pipe fd so we can get a new handle to the target file
-				call(pid, LIB_C_STR, close_ptr, 1, remote_proxy_fd);								
-				int temp_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_target_str_addr, O_RDWR);				
-				call(pid, LIB_C_STR, write_ptr, 3, temp_fd, remote_data_addr, strlen(proxied_write));
-				int new_fd = call(pid, LIB_C_STR, open_ptr, 2, remote_fifo_str_addr, O_RDWR | O_NONBLOCK);				
-				call(pid, LIB_C_STR, dup2_ptr, 2,  temp_fd, new_fd);				
-				call(pid, LIB_C_STR, close_ptr, 1, new_fd);								
-				sleep(1);
-				bzero(read_buf, 1024);				
+	
+	while(1) {			
+		if(ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
+			perror("Error getting system call");
+			printf("Errno: %d\n",errno);
+			continue;
+		}
+		waitpid(pid, 0, WSTOPPED);
+		ptrace(PTRACE_GETREGS, pid, 0, &regs);
+		// retreive the system call number
+		long syscall = regs.orig_rax;        
+		
+        fprintf(stderr, "%ld(%ld, %ld, %ld, %ld, %ld, %ld)\n",
+                syscall,
+                (long)regs.rdi, (long)regs.rsi, (long)regs.rdx,
+                (long)regs.r10, (long)regs.r8,  (long)regs.r9);	
+		
+		switch(syscall) {
+			case __NR_read:
+				printf("Caught call to read()\n");				
 				break;
-			// detect read attempt and write to the fifo
-			/**
-			case POLLOUT:
-				printf("Caught read attempt\n");
-				write(local_fd, write_buf, strlen(write_buf) + 1);
+			case __NR_write:				
+				if(regs.rdi == target_fd) {
+					printf("Target proc attempting to write %llu bytes from %p\n", regs.rdx, (void *) regs.rsi);
+					void * remote_buf = (void *)regs.rsi;
+					printf("Pointer to remote buffer: %p\n",remote_buf);
+					unsigned long to_read = regs.rdx;
+					// allocate space for the string we are reading and add enough flex space at the end to account for extra unneeded data
+					char * copied_data = malloc(to_read + sizeof(size_t));
+					char * tmp_ptr = copied_data;
+					bzero(copied_data, to_read + sizeof(size_t));
+					int i;
+					for (i = 0; i < to_read; i++){
+						long data = ptrace(PTRACE_PEEKDATA, pid, remote_buf, 0);
+						if(data == -1) {
+							perror("PEEK_DATA ERROR");
+						}
+						memcpy(remote_buf, &data, sizeof(size_t));
+						to_read -= sizeof(size_t);
+						copied_data += sizeof(size_t);					
+					}
+					printf("Target proc wanted to write %s\n", tmp_ptr);
+					free(tmp_ptr);
+					
+						
+					
+				}
 				break;
-				**/
-			default:				
+			default:
 				break;
 		}
+			
+		
+		
+		
+		
+
 
 	}
 	return 0;
