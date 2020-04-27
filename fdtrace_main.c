@@ -15,6 +15,8 @@
  * Example: fdswap 23445 /dev/null 
  */
 
+#define DATA_MAX_LEN 1024
+
 #define USAGE																  \
 "usage:\n"                                                                    \
 "  fdtrace [options]\n"                                                       \
@@ -68,11 +70,13 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "must specify a remote process with -p\n");
 		return 1;
 	}
+
 	steque_t queue;
 	steque_t target_file_q;		
 	char * target_file = "/home/parsons/tmp/fdtest"; // my test terminal
 	
 	DIR * dir = NULL;			
+	void * calloc_ptr = (void *)&calloc;
 	steque_init(&queue);
 	steque_init(&target_file_q);
 	// enumerate target process' open file descriptors
@@ -101,6 +105,10 @@ int main(int argc, char** argv) {
 		free(temp);		
 	}
 	closedir(dir);
+	
+	// allocate and fill remote buffer for the data we actually want the target processs to write
+	// We have to do this now, because we can't do it once the process is stopped later.
+	
 	//int target_fd = open(target_file, O_RDWR);	
 	//struct pollfd pfd[1];
 	//pfd[0].fd = local_fd;
@@ -110,15 +118,24 @@ int main(int argc, char** argv) {
 	//char write_buf[] = "Modified read\n";		
 	struct user_regs_struct regs;
 	//struct ptrace_syscall_info syscall_info;
+	char * data_to_write = "MODIFIED WRITE OPERATION\n";
+	long new_remote_buf = call(pid, LIB_C_STR, calloc_ptr, 1, DATA_MAX_LEN);
+	
+
+	printf("Allocated %d bytes at %p\n", DATA_MAX_LEN, (void *) new_remote_buf);
 	ptrace(PTRACE_ATTACH, pid, 0, 0);
 	waitpid(pid, 0, WSTOPPED);
+	
+	putdata(pid, new_remote_buf, data_to_write, strlen(data_to_write + 1));
+	/**
 	printf("Waiting for syscall\n");
 		if(ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
 			perror("Error getting system call");
 			printf("Errno: %d\n",errno);			
 		}
 		waitpid(pid, 0, WSTOPPED);
-	
+	**/
+	printf("waiting for system call\n\n");
 	while(1) {			
 		if(ptrace(PTRACE_SYSCALL, pid, 0, 0) == -1) {
 			perror("Error getting system call");
@@ -129,18 +146,17 @@ int main(int argc, char** argv) {
 		ptrace(PTRACE_GETREGS, pid, 0, &regs);
 		// retreive the system call number
 		long syscall = regs.orig_rax;        
-		/**
-        fprintf(stderr, "%ld(%ld, %ld, %ld, %ld, %ld, %ld)\n",
-                syscall,
-                (long)regs.rdi, (long)regs.rsi, (long)regs.rdx,
-                (long)regs.r10, (long)regs.r8,  (long)regs.r9);	
-		**/
+		
+        	
+		
 		switch(syscall) {
 			case SYS_read:
 				printf("Caught call to read()\n");				
 				break;
 			case SYS_write:				
 				if(regs.rdi == target_fd) {
+					fprintf(stdout, "Registers: rdi: %ld, rsi: %ld (%p), rdx: %ld\n",
+						(long)regs.rdi, (long)regs.rsi, (void *)regs.rsi, (long)regs.rdx);
 					printf("Target proc attempting to write %llu bytes from %p\n", regs.rdx, (void *) regs.rsi);
 					void * remote_buf = (void *)regs.rsi;
 					printf("Pointer to remote buffer: %p\n",remote_buf);
@@ -168,23 +184,33 @@ int main(int argc, char** argv) {
 						//printf("%ld bytes left to read\n",to_read);
 								
 					}
-					printf("Target proc wanted to write: %s\n", copied_data);
-					
-									
-						
-					
+					printf("Target proc wanted to write: %s\n", copied_data);					
+
+					// modify the target process' register (rsi) to point to the new buffer instead of the old
+					regs.rsi = new_remote_buf;
+					regs.rdx = strlen(data_to_write) + 1;
+					if(ptrace(PTRACE_SETREGS, pid, NULL, &regs) == -1) {
+						perror("PTRACE_SETREGS error");
+					} 
+					// print new register values
+					ptrace(PTRACE_GETREGS, pid, 0, &regs);
+
+					fprintf(stdout, "Registers: rdi: %ld, rsi: %ld, rdx: %ld\n",
+						(long)regs.rdi, (long)regs.rsi, (long)regs.rdx);
+					printf("New write argument is %p\n", (void *) regs.rsi);
+					// allow remote process execution to continue
+					ptrace(PTRACE_SYSCALL, pid, 0, 0);
+					waitpid(pid, 0, WSTOPPED);
+					// should be stopped at syscall exit now, let's expect return values
+					ptrace(PTRACE_GETREGS, pid, 0, &regs);
+					printf("syscall returned: %ld\n\n\n", (long)regs.rax);
+					//ptrace(PTRACE_CONT, pid, 0, 0);
 				}
 				break;
 			default:
 				break;
 		}
-			
 		
-		
-		
-		
-
-
 	}
 	return 0;
 }
