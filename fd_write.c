@@ -5,13 +5,13 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <unistd.h>
 
 void do_write() {
-    // Writes message to stdout then sleeps
-    int ctr = 0;    
+    // Writes message to stdout then sleeps      
     
     int fd = open("/home/parsons/tmp/fdtest", O_NONBLOCK | O_WRONLY);
     //int read_fd = open("/dev/urandom", O_RDONLY);
@@ -22,6 +22,7 @@ void do_write() {
     
     printf("obtained handle with fd %d\n", fd);
     char * buf = malloc(20);    
+    printf("Write buffer address: %p\n", buf);
     while(1) {        
         if(errno) {
             perror("Error");
@@ -29,8 +30,8 @@ void do_write() {
             errno = 0;
         }
         else {
-            printf("Writing to fd %d\n", fd);            
-            snprintf(buf, 20, "PID: %d\n", ctr);            
+            //printf("Writing to fd %d\n", fd);               
+            snprintf(buf, 20, "write test\n");            
             if(write(fd, buf, strlen(buf)) == -1) {
                 char err_str[1024] = {0};
                 snprintf(err_str, 1024, "Write error fd %d", fd);
@@ -39,7 +40,6 @@ void do_write() {
             }
             sleep(1);            
         }
-        ctr++;  
     }
     close(fd);
     //close(read_fd);
@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
     
     int pid = getpid();
     printf("PID: %d\n", pid);
+    printf("SYS_write number: %d\n", SYS_write);
+    printf("SYS_read number: %d\n", SYS_read);
 
     // big brain arg parsing
     if(strcmp(argv[1], "w") == 0) {

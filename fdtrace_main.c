@@ -129,39 +129,48 @@ int main(int argc, char** argv) {
 		ptrace(PTRACE_GETREGS, pid, 0, &regs);
 		// retreive the system call number
 		long syscall = regs.orig_rax;        
-		
+		/**
         fprintf(stderr, "%ld(%ld, %ld, %ld, %ld, %ld, %ld)\n",
                 syscall,
                 (long)regs.rdi, (long)regs.rsi, (long)regs.rdx,
                 (long)regs.r10, (long)regs.r8,  (long)regs.r9);	
-		
+		**/
 		switch(syscall) {
-			case __NR_read:
+			case SYS_read:
 				printf("Caught call to read()\n");				
 				break;
-			case __NR_write:				
+			case SYS_write:				
 				if(regs.rdi == target_fd) {
 					printf("Target proc attempting to write %llu bytes from %p\n", regs.rdx, (void *) regs.rsi);
 					void * remote_buf = (void *)regs.rsi;
 					printf("Pointer to remote buffer: %p\n",remote_buf);
-					unsigned long to_read = regs.rdx;
+					long to_read = (long) regs.rdx;
 					// allocate space for the string we are reading and add enough flex space at the end to account for extra unneeded data
-					char * copied_data = malloc(to_read + sizeof(size_t));
-					char * tmp_ptr = copied_data;
-					bzero(copied_data, to_read + sizeof(size_t));
-					int i;
-					for (i = 0; i < to_read; i++){
-						long data = ptrace(PTRACE_PEEKDATA, pid, remote_buf, 0);
+					int bufsize = to_read + sizeof(long);
+					char * copied_data = malloc(bufsize);										
+					bzero(copied_data, bufsize);
+					printf("allocated buffer of %d bytes\n", bufsize);
+
+					int copied;
+					long data = 0;
+					
+					printf("Attempting to peek remote buffer\n");
+					for (copied = 0; to_read > 0; copied += sizeof(data)){
+						data = ptrace(PTRACE_PEEKDATA, pid, remote_buf + copied, 0);
 						if(data == -1) {
 							perror("PEEK_DATA ERROR");
+							break;
 						}
-						memcpy(remote_buf, &data, sizeof(size_t));
-						to_read -= sizeof(size_t);
-						copied_data += sizeof(size_t);					
+						printf("copying %ld bytes to %p\n", sizeof(data), copied_data + copied);						
+						memcpy(copied_data + copied, &data, sizeof(data));
+						to_read -= sizeof(data);
+						printf("Copied: %s\n",copied_data + copied);
+						//printf("%ld bytes left to read\n",to_read);
+								
 					}
-					printf("Target proc wanted to write %s\n", tmp_ptr);
-					free(tmp_ptr);
+					printf("Target proc wanted to write: %s\n", copied_data);
 					
+									
 						
 					
 				}
