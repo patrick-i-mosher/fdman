@@ -138,7 +138,7 @@ static void init_write_context(void) {
 		gen_ctx->fatal_error = 1;
 		terminate();
 	}
-	putdata(gen_ctx->pid, write_ctx->write_replacement_buf_addr, write_ctx->data_to_write, strlen(write_ctx->data_to_write + 1));	
+	poke_remote_buffer(write_ctx->write_replacement_buf_addr, write_ctx->data_to_write);	
 }
 
 static void init_read_context() {
@@ -251,22 +251,17 @@ static void peek_remote_buffer(void * remote_buf_addr) {
 }
 
 static void poke_remote_buffer(long remote_buf_addr, char *data_to_write) {
-	int copied, j;
-	union u {
-		long val;
-		char chars[sizeof(long)];
-	} data;
-	copied = 0;
-	j = strlen(data_to_write) / sizeof(long);
-	while(copied < j) {		
-		ptrace(PTRACE_POKEDATA, gen_ctx->pid, remote_buf_addr + copied * sizeof(long), data_to_write);      
-		copied++;		
+	int	copied_blocks = 0;
+	int blocks_to_copy = strlen(data_to_write) / sizeof(long);
+	while(copied_blocks < blocks_to_copy) {		
+		ptrace(PTRACE_POKEDATA, gen_ctx->pid, remote_buf_addr, data_to_write);      
+		remote_buf_addr += sizeof(long);
 		data_to_write += sizeof(long);
+		++copied_blocks;
 	}
-	j = strlen(data_to_write) % sizeof(long);
-	if(j != 0) {
-		memcpy(data.chars, data_to_write, j);
-		ptrace(PTRACE_POKEDATA, gen_ctx->pid, remote_buf_addr + copied * sizeof(long), data.val);      
+	int bytes_left = strlen(data_to_write) % sizeof(long);
+	if(bytes_left != 0) {		
+		ptrace(PTRACE_POKEDATA, gen_ctx->pid, remote_buf_addr, data_to_write);      
 	}
 }
 
