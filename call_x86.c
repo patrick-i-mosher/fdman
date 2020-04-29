@@ -1,16 +1,13 @@
 
 #include "call_x86.h"
 
-// find the location of a shared library in memory
 void *find_library(pid_t pid, const char *libname) {
-  // text seen in /proc/<pid>/maps for text areas
   static const char *text_area = " r-xp ";
   char filename[32];
   snprintf(filename, sizeof(filename), "/proc/%d/maps", pid);
   FILE *f = fopen(filename, "r");
   char *line = NULL;
   size_t line_size = 0;
-
   while (getline(&line, &line_size, f) >= 0) {
     char *pos = strstr(line, libname);
     if (pos != NULL && strstr(line, text_area)) {
@@ -24,21 +21,7 @@ void *find_library(pid_t pid, const char *libname) {
   fclose(f);
   return NULL;
 }
-/*
-void *findFunction( const char* library, void* local_addr, pid_t pid ){
-	void * local_handle;
-	void * remote_handle;
-	local_handle = find_library(getpid(), library);
-	remote_handle = find_library(pid, library);
-  //printf("My libc: %p\nTheir libc: %p\n", (void*) local_handle, (void*) remote_handle);
-	return (void *) local_addr + (void *) remote_handle - (void *) local_handle;
-}
-*/
 
-// Update the text area of pid at the area starting at where. The data copied
-// should be in the new_text buffer whose size is given by len. If old_text is
-// not null, the original text data will be copied into it. Therefore old_text
-// must have the same size as new_text.
 int poke_text(pid_t pid, void *where, void *new_text, void *old_text,
               size_t len) {
   if (len % sizeof(void *) != 0) {
@@ -107,7 +90,6 @@ int do_wait(const char *name) {
   }
   printf("%s got unexpected status %d\n", name, status);
   return -1;
-
 }
 
 int singlestep(pid_t pid) {

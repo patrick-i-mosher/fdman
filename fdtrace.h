@@ -27,6 +27,7 @@ typedef struct general_context {
 	void * calloc_ptr;
 	int target_fd;
 	int fatal_error;
+	int log_file;
 } general_context;
 
 typedef struct file_context {
@@ -68,21 +69,7 @@ file_context * file_ctx;
 
 void init(int argc, char** argv);
 void terminate();
-void intercept_write();
-void init_general_context();	
-void init_file_context();
-void init_write_context();
-void init_read_context();
-void release_file_context();
-void release_write_context();
-void release_read_context();
-void release_general_context();
-int parse_args( int argc, char** argv);
 void scan_fd();
-void peek_remote_buffer();
-void parse_sys_write_registers();
-void modify_sys_write_registers();
-
-
-
+void intercept_write();
+void write_log(char * log_level, char * err_file, int line_number, char * log_str);
 #endif
