@@ -15,20 +15,11 @@
 #include <sys/types.h>
 #include <sys/user.h>
 #include <unistd.h>
-#include "call_x86.h"
+#include "call_x86_64.h"
 
 /**
  * DATA STRUCTURES
 **/
-
-typedef struct general_context {
-	long pid;
-	struct user_regs_struct * regs;
-	void * calloc_ptr;
-	int target_fd;
-	int fatal_error;
-	int log_file;
-} general_context;
 
 typedef struct file_context {
 	char * target_file;	
@@ -54,14 +45,24 @@ typedef struct write_context {
 	write_syscall_args sys_write_args;
 } write_context;
 
+typedef struct general_context {
+	read_context * read_ctx;
+	write_context * write_ctx;
+	file_context * file_ctx;
+	call_x86_64_context * call_ctx;
+	long pid;
+	struct user_regs_struct * regs;
+	void * calloc_ptr;
+	int target_fd;
+	int fatal_error;
+	int log_file;
+} general_context;
+
 /**
  * GLOBAL VARIABLES
 **/
 
 general_context * gen_ctx;
-read_context * read_ctx;
-write_context * write_ctx;
-file_context * file_ctx;
 
 /**
  * FUNCTION DECLARATIONS 

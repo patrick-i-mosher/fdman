@@ -66,6 +66,7 @@
 #include <sys/ptrace.h>
 
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/user.h>
 #include <sys/wait.h>
@@ -75,11 +76,24 @@
 #define REL32_SZ 5
 #define LIB_C_STR "/libc-2"
 
+typedef struct call_x86_64_context {
+    pid_t pid;
+    char * lib_str;
+    void * local_libc_addr;
+    void * remote_libc_addr;
+    static const char *format;
+    struct user_regs_struct * register_save_state;
+    struct user_regs_struct * newregs;
+    uint8_t old_word[8];
+    uint8_t new_word[8];
+} call_x86_64_context;
+
 void *find_library(pid_t pid, const char *libname);
 void check_yama(void);
 int32_t compute_jmp(void *from, void *to);
 int do_wait(const char *name);
-long call(pid_t pid, char *lib_string, void *local_function, int nargs, ...);
+call_x86_64_context * init_call_context(pid_t pid)
+long call(call_x86_64_context * call_ctx1, void *local_function, int nargs, ...);
 int poke_text(pid_t pid, void *where, void *new_text, void *old_text,
               size_t len);
 int singlestep(pid_t pid);

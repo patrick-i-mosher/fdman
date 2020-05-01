@@ -1,15 +1,16 @@
 #include "fdtrace.h"
 
 static void init_general_context();	
-static void init_file_context();
-static void init_write_context();
-static void init_read_context();
+static file_context * init_file_context();
+static write_context * init_write_context();
+static read_context * init_read_context();
 static void release_file_context();
 static void release_write_context();
 static void release_read_context();
 static void release_general_context();
 static int parse_args( int argc, char** argv);
 static void peek_remote_buffer(void * remote_buf_addr);
+static void poke_remote_buffer(long remote_buf_addr, char *data_to_write);
 static void parse_sys_write_registers();
 static void modify_sys_write_registers();
 
@@ -31,19 +32,17 @@ static struct option gLongOptions[] = {
 
 void init(int argc, char** argv) {
 	gen_ctx = NULL;
-	write_ctx = NULL;
-	read_ctx = NULL;
-	file_ctx = NULL;
+	gen_ctx->write_ctx = NULL;
+	gen_ctx->read_ctx = NULL;
+	gen_ctx->file_ctx = NULL;
 	long pid = parse_args(argc, argv);
 	if(pid == -1) {
 		write_log("FATAL ERROR", __FILE__, __LINE__, "must specify a remote process with -p\n");
 		gen_ctx->fatal_error = 1;
 		terminate();
 	}
-	init_general_context(pid);	
-	init_write_context();
-	init_read_context();
-	init_file_context();
+	init_general_context(pid);			
+	
 }
 
 void terminate() {
@@ -66,24 +65,24 @@ void intercept_write() {
 }
 
 void scan_fd() {
-	while((file_ctx->entry = readdir(file_ctx->dir))) {
-		bzero(file_ctx->stat_buf, sizeof(struct stat));
-		bzero(file_ctx->proc_path, PATH_MAX);
-		snprintf(file_ctx->proc_path, PATH_MAX, "/proc/%ld/fd/%s",gen_ctx->pid, file_ctx->entry->d_name);
-		if(lstat(file_ctx->proc_path, file_ctx->stat_buf) == -1) {
+	while((gen_ctx->file_ctx->entry = readdir(gen_ctx->file_ctx->dir))) {
+		bzero(gen_ctx->file_ctx->stat_buf, sizeof(struct stat));
+		bzero(gen_ctx->file_ctx->proc_path, PATH_MAX);
+		snprintf(gen_ctx->file_ctx->proc_path, PATH_MAX, "/proc/%ld/fd/%s",gen_ctx->pid, gen_ctx->file_ctx->entry->d_name);
+		if(lstat(gen_ctx->file_ctx->proc_path, gen_ctx->file_ctx->stat_buf) == -1) {
 			write_log("ERROR", __FILE__, __LINE__, strerror(errno));
 			continue;
 		}
-		if(S_ISLNK(file_ctx->stat_buf->st_mode)) {
+		if(S_ISLNK(gen_ctx->file_ctx->stat_buf->st_mode)) {
 			char* slink_target = NULL;
 			slink_target = malloc(PATH_MAX);
-			ssize_t link_len = readlink(file_ctx->proc_path, slink_target, PATH_MAX);
+			ssize_t link_len = readlink(gen_ctx->file_ctx->proc_path, slink_target, PATH_MAX);
 			if( link_len == -1){
 				write_log("ERROR", __FILE__, __LINE__, strerror(errno));				
 				continue;
 			}
-			if(strncmp(slink_target, file_ctx->target_file, link_len) == 0){				
-				gen_ctx->target_fd = atoi(file_ctx->entry->d_name);				
+			if(strncmp(slink_target, gen_ctx->file_ctx->target_file, link_len) == 0){				
+				gen_ctx->target_fd = atoi(gen_ctx->file_ctx->entry->d_name);				
 			}
 			free(slink_target);
 		}
@@ -98,8 +97,8 @@ void write_log(char * log_level, char * err_file, int line_number, char * log_st
 	free(logline);
 }
 
-static void init_file_context() {
-	file_ctx = calloc(1, sizeof(file_context));
+static file_context * init_file_context() {
+	file_context * file_ctx = calloc(1, sizeof(file_context));
 	file_ctx->target_file = "/home/parsons/tmp/fdtest"; 	
 	file_ctx->dir = NULL;				
 	file_ctx->entry = calloc(1, sizeof(struct dirent));
@@ -112,7 +111,7 @@ static void init_file_context() {
 		gen_ctx->fatal_error = 1;
 		terminate();
 	}
-
+	return file_ctx;
 }
 
 static void init_general_context(long pid) {	
@@ -123,10 +122,14 @@ static void init_general_context(long pid) {
 	gen_ctx->target_fd = -1;
 	gen_ctx->fatal_error = 0;
 	gen_ctx->log_file = open(LOG_PATH, O_CREAT | O_WRONLY, 0777);
+	gen_ctx->write_ctx = init_write_ctx();
+	gen_ctx->read_ctx = init_read_context();
+	gen_ctx->file_ctx = init_file_context();
+	gen_ctx->call_ctx = init_call_context(pid);
 }
 
-static void init_write_context(void) {
-	write_ctx = calloc(1, sizeof(write_context));
+static write_context * init_write_context(void) {
+	write_context * write_ctx = calloc(1, sizeof(write_context));
 	write_ctx->data_to_write = "MODIFIED WRITE OPERATION\n";
 	write_ctx->sys_write_args.sys_write_fd = 0;
 	write_ctx->sys_write_args.sys_write_buf_addr = 0;
@@ -139,10 +142,12 @@ static void init_write_context(void) {
 		terminate();
 	}
 	poke_remote_buffer(write_ctx->write_replacement_buf_addr, write_ctx->data_to_write);	
+	return write_ctx;
 }
 
-static void init_read_context() {
-	read_ctx = calloc(1, sizeof(read_context));
+static read_context * init_read_context() {
+	read_context * read_ctx = calloc(1, sizeof(read_context));
+	return read_ctx;
 }
 
 static int parse_args(int argc, char** argv) {
@@ -189,36 +194,36 @@ static int parse_args(int argc, char** argv) {
 }
 
 static void release_file_context(){
-	if(file_ctx == NULL) {
+	if(gen_ctx->file_ctx == NULL) {
 		return;
 	}
-	if(file_ctx->dir != NULL) {
-		closedir(file_ctx->dir);
+	if(gen_ctx->file_ctx->dir != NULL) {
+		closedir(gen_ctx->file_ctx->dir);
 	}
-	if(file_ctx->proc_path != NULL) {
-		free(file_ctx->proc_path);
+	if(gen_ctx->file_ctx->proc_path != NULL) {
+		free(gen_ctx->file_ctx->proc_path);
 	}
-	if(file_ctx->entry != NULL) {
-		free(file_ctx->entry);
+	if(gen_ctx->file_ctx->entry != NULL) {
+		free(gen_ctx->file_ctx->entry);
 	}
-	if(file_ctx->stat_buf != NULL) {
-		free(file_ctx->stat_buf);
+	if(gen_ctx->file_ctx->stat_buf != NULL) {
+		free(gen_ctx->file_ctx->stat_buf);
 	}
-	free(file_ctx);
+	free(gen_ctx->file_ctx);
 }
 
 static void release_read_context() {
-	if(read_ctx == NULL) {
+	if(gen_ctx->read_ctx == NULL) {
 		return;
 	}
-	free(read_ctx);
+	free(gen_ctx->read_ctx);
 }
 
 static void release_write_context() {
-	if(write_ctx == NULL) {
+	if(gen_ctx->write_ctx == NULL) {
 		return;
 	}
-	free(write_ctx);
+	free(gen_ctx->write_ctx);
 
 }
 
@@ -267,14 +272,14 @@ static void poke_remote_buffer(long remote_buf_addr, char *data_to_write) {
 
 
 static void parse_sys_write_registers() {
-	write_ctx->sys_write_args.sys_write_fd = gen_ctx->regs->rdi;
-	write_ctx->sys_write_args.sys_write_buf_addr = gen_ctx->regs->rsi;
-	write_ctx->sys_write_args.sys_write_count = gen_ctx->regs->rdx;
+	gen_ctx->write_ctx->sys_write_args.sys_write_fd = gen_ctx->regs->rdi;
+	gen_ctx->write_ctx->sys_write_args.sys_write_buf_addr = gen_ctx->regs->rsi;
+	gen_ctx->write_ctx->sys_write_args.sys_write_count = gen_ctx->regs->rdx;
 }
 
 static void modify_sys_write_registers() {
-	gen_ctx->regs->rsi = write_ctx->write_replacement_buf_addr;
-	gen_ctx->regs->rdx = strlen(write_ctx->data_to_write) + 1;
+	gen_ctx->regs->rsi = gen_ctx->write_ctx->write_replacement_buf_addr;
+	gen_ctx->regs->rdx = strlen(gen_ctx->write_ctx->data_to_write) + 1;
 	if(ptrace(PTRACE_SETREGS, gen_ctx->pid, NULL, gen_ctx->regs) == -1) {
 		perror("PTRACE_SETREGS error");
 	} 
