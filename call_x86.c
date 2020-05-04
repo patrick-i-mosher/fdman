@@ -1,5 +1,5 @@
 
-#include "call_x86_64.h"
+#include "call_x86.h"
 
 void *find_library(pid_t pid, const char *libname) {
   static const char *text_area = " r-xp ";
@@ -129,24 +129,35 @@ int32_t compute_jmp(void *from, void *to) {
 }
 
 int attach_process(pid_t pid) {
-    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)) {
-        perror("PTRACE_ATTACH");
+    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL)) {        
         check_yama();
         return -1;
     }  
-    if (waitpid(pid, 0, WSTOPPED) == -1) {
-        perror("wait");
+    if (waitpid(pid, 0, WSTOPPED) == -1) {        
         return -1;
     }
+    return 0;
 }
+
 int save_register_state(pid_t pid, struct user_regs_struct * register_save_state) {        
     if (ptrace(PTRACE_GETREGS, pid, NULL, register_save_state)) {
         perror("PTRACE_GETREGS");
         ptrace(PTRACE_DETACH, pid, NULL, NULL);
         return -1;
     }
+    return 0;
 }
-void * syscall_mmap(call_x86_64_context * call_ctx) { 
+
+void syscall_munmap(call_x86_context * call_ctx, void * addr) {
+    // unmap the memory we allocated
+    call_ctx->newregs->rax = SYS_munmap;        
+    call_ctx->newregs->rdi = (long)addr;        
+    call_ctx->newregs->rsi = PAGE_SIZE;                    
+    ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->newregs);  
+    singlestep(call_ctx->pid);    
+}
+
+void * syscall_mmap(call_x86_context * call_ctx) { 
     void *rip = (void *)call_ctx->register_save_state->rip;
     memmove(call_ctx->newregs, call_ctx->register_save_state, sizeof(struct user_regs_struct));
     call_ctx->newregs->rax = SYS_mmap;                    // mmap
@@ -176,9 +187,8 @@ void * syscall_mmap(call_x86_64_context * call_ctx) {
         return NULL;
     }
     // read the new register state, so we can see where the mmap went
-    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
-        perror("PTRACE_GETREGS");
-        return -1;
+    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {        
+        return NULL;
     }
     // this is the address of the memory we allocated    
     if ((void *)call_ctx->newregs->rax == (void *)-1) {        
@@ -188,8 +198,9 @@ void * syscall_mmap(call_x86_64_context * call_ctx) {
         return (void *)call_ctx->newregs->rax;
     }
 }
-call_x86_64_context * init_call_context(pid_t pid) {
-    call_x86_64_context * call_ctx = calloc(sizeof(call_x86_64_context));
+
+call_x86_context * init_call_context(pid_t pid) {
+    call_x86_context * call_ctx = calloc(1, sizeof(call_x86_context));
     call_ctx->pid = pid;    
     call_ctx->remote_libc_addr = find_library(call_ctx->pid, LIB_C_STR);
     call_ctx->local_libc_addr = find_library(getpid(), LIB_C_STR);
@@ -199,33 +210,7 @@ call_x86_64_context * init_call_context(pid_t pid) {
     return call_ctx;
 }
 
-long call(call_x86_64_context * call_ctx, void *local_function, int nargs, ...) {      
-    if (attach_process(call_ctx->pid) == -1) {
-        return -1;
-    }
-    
-    if(save_register_state(call_ctx->pid, call_ctx->register_save_state) == -1) {
-        return -1;
-    }  
-    void * mmap_memory = syscall_mmap(call_ctx);
-    if(mmap_memory == NULL) {
-        return -1;
-    }
-    // JMP to newly mapped region
-    if (singlestep(call_ctx->pid)) {
-        goto fail;
-    }
-    // Verify that JMP got us to the right address
-    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
-        perror("PTRACE_GETREGS");
-        goto fail;
-    }
-    if (newregs.rip != (long)mmap_memory) {
-        goto fail;
-    }
-    void * remote_func_addr = call_ctx->remote_libc_addr + (local_function - call_ctx->local_libc_addr);
-    
-    // memory we are going to copy into our mmap area
+int insert_call_instruction(call_x86_context * call_ctx, void * mmap_memory, void * remote_func_addr) {
     uint8_t new_text[32] = {0};
     // insert a CALL instruction
     size_t offset = 0;
@@ -233,132 +218,120 @@ long call(call_x86_64_context * call_ctx, void *local_function, int nargs, ...) 
     int32_t fprintf_delta = compute_jmp(mmap_memory, remote_func_addr);
     memmove(new_text + offset, &fprintf_delta, sizeof(fprintf_delta));
     offset += sizeof(fprintf_delta);
-
     // insert a TRAP instruction
     new_text[offset++] = 0xcc;
-
-    // copy our fprintf format string right after the TRAP instruction
-    // I think I can delete this but I want to make sure first
-    memmove(new_text + offset, format, strlen(format));
-
-    // update the mmap area
-    //printf("inserting code/data into the mmap area at %p\n", mmap_memory);
-    if (poke_text(pid, mmap_memory, new_text, NULL, sizeof(new_text))) {
-        goto fail;
+    if (poke_text(call_ctx->pid, mmap_memory, new_text, NULL, sizeof(new_text))) {
+        return -1;    
     }
 
-    if (poke_text(pid, rip, new_word, NULL, sizeof(new_word))) {
-        goto fail;
+    if (poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, call_ctx->new_word, NULL, sizeof(call_ctx->new_word))) {
+        return -1;
     }
+    return 0;
+}
+int set_call_registers(call_x86_context * call_ctx, va_list vl, int nargs) {
+    // For now this a very limitted use case so I am only handling up to six arguments  
+    int i = 0;
+    unsigned long long int *regarray[6] = {&call_ctx->newregs->rdi, &call_ctx->newregs->rsi, 
+        &call_ctx->newregs->rdx, &call_ctx->newregs->rcx, &call_ctx->newregs->r8, &call_ctx->newregs->r9};
+    for( i = 0; i < nargs; ++i ){
+        unsigned long arg = va_arg( vl, long );
+        // fill registers with first six arguments		
+        memcpy(regarray[i], &arg, sizeof(int));	
+    }    
+    if (ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
+        perror("PTRACE_SETREGS");
+        return -1;
+  }  
+  return 0;
+}
 
-    // Set up registers with the arguments to the target function.
-    // For now this a very limitted use case so I am only checking the first six arguments
-  
-  va_list vl;
-  va_start(vl,nargs);
-  int i = 0;
-  unsigned long long int *regarray[6] = {&newregs.rdi, &newregs.rsi, &newregs.rdx, &newregs.rcx, &newregs.r8, &newregs.r9};
-	for( i = 0; i < nargs; ++i ){
-	  unsigned long arg = va_arg( vl, long );
-		// fill registers with first six arguments		
-		memcpy(regarray[i], &arg, sizeof(int));		
-	}
-	va_end(vl);
+void release_resources(call_x86_context * call_ctx, void * mmap_memory) { 
+    syscall_munmap(call_ctx, mmap_memory);
+    poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, 
+        call_ctx->old_word, NULL, sizeof(call_ctx->old_word));
+}
 
-/**
-  newregs.rax = 0;                          // no vector registers are used
-  newregs.rdi = (long)their_stderr;         // pointer to stderr in the caller
-  newregs.rsi = (long)mmap_memory + offset; // pointer to the format string
-  **/
-  
+long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {      
+    if (attach_process(call_ctx->pid) == -1) {
+        return -1;
+    }    
+    if(save_register_state(call_ctx->pid, call_ctx->register_save_state) == -1) {
+        return -1;
+    }  
+    void * mmap_memory = syscall_mmap(call_ctx);
+    if(mmap_memory == NULL) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    // JMP to newly mapped region
+    if (singlestep(call_ctx->pid)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    // Verify that JMP got us to the right address
+    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    if (call_ctx->newregs->rip != (long)mmap_memory) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    void * remote_func_addr = call_ctx->remote_libc_addr + (local_function - call_ctx->local_libc_addr);
+    if (insert_call_instruction(call_ctx, mmap_memory, remote_func_addr) == -1) { 
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }   
+    va_list vl;
+    va_start(vl,nargs);    
+    if (set_call_registers(call_ctx, vl, nargs) == -1) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    va_end(vl);
+    // continue the program, and wait for the trap    
+    ptrace(PTRACE_CONT, call_ctx->pid, NULL, NULL);
+    if (do_wait("PTRACE_CONT")) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    long ret = call_ctx->newregs->rax;    
+    call_ctx->newregs->rax = (long)call_ctx->register_save_state;  
+    if (ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;    
+    }
+    call_ctx->new_word[0] = 0xff; // JMP %rax
+    call_ctx->new_word[1] = 0xe0; // JMP %rax
+    poke_text(call_ctx->pid, (void *)call_ctx->newregs->rip, call_ctx->new_word, NULL, sizeof(call_ctx->new_word));
+    if (singlestep(call_ctx->pid)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    if (call_ctx->newregs->rip != (long) call_ctx->register_save_state->rip) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    } 
 
-  //printf("setting the registers of the remote process\n");
-  if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_SETREGS");
-    goto fail;
-  }
+    //printf("restoring old text at %p\n", rip);
+    poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, call_ctx->old_word, NULL, sizeof(call_ctx->old_word));
 
-  // continue the program, and wait for the trap
-  //printf("continuing execution\n");
-  ptrace(PTRACE_CONT, pid, NULL, NULL);
-  if (do_wait("PTRACE_CONT")) {
-    goto fail;
-  }
-
-  if (ptrace(PTRACE_GETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_GETREGS");
-    goto fail;
-  }
-  long ret = newregs.rax;
-  newregs.rax = (long)rip;
-  if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_SETREGS");
-    goto fail;
-  }
-
-  new_word[0] = 0xff; // JMP %rax
-  new_word[1] = 0xe0; // JMP %rax
-  poke_text(pid, (void *)newregs.rip, new_word, NULL, sizeof(new_word));
-
-  //printf("jumping back to original rip\n");
-  if (singlestep(pid)) {
-    goto fail;
-  }
-  if (ptrace(PTRACE_GETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_GETREGS");
-    goto fail;
-  }
-
-  if (newregs.rip == (long)rip) {
-    //printf("successfully jumped back to original %%rip at %p\n", rip);
-  } else {
-    //printf("unexpectedly jumped to %p (expected to be at %p)\n",
-    //       (void *)newregs.rip, rip);
-    goto fail;
-  }
-  
-  // unmap the memory we allocated
-  newregs.rax = SYS_munmap;        // munmap
-  newregs.rdi = (long)mmap_memory; // addr
-  newregs.rsi = PAGE_SIZE;         // size
-  if (ptrace(PTRACE_SETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_SETREGS");
-    goto fail;
-  }
-
-  // make the system call
-  //printf("making call to mmap\n");
-  if (singlestep(pid)) {
-    goto fail;
-  }
-  if (ptrace(PTRACE_GETREGS, pid, NULL, &newregs)) {
-    perror("PTRACE_GETREGS");
-    goto fail;
-  }
-  //printf("munmap returned with status %llu\n", newregs.rax);
-
-  //printf("restoring old text at %p\n", rip);
-  poke_text(pid, rip, old_word, NULL, sizeof(old_word));
-
-  //printf("restoring old registers\n");
-  if (ptrace(PTRACE_SETREGS, pid, NULL, &register_save_state)) {
-    perror("PTRACE_SETREGS");
-    goto fail;
-  }
-
-  // detach the process
-  //printf("detaching\n");
-  if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
-    perror("PTRACE_DETACH");
-    goto fail;
-  }
-  return ret;
-
-fail:
-  poke_text(pid, rip, old_word, NULL, sizeof(old_word));
-  if (ptrace(PTRACE_DETACH, pid, NULL, NULL)) {
-    perror("PTRACE_DETACH");
-  }
-  return 1;
+    //printf("restoring old registers\n");
+    if (ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->register_save_state)) {
+        release_resources(call_ctx, mmap_memory);
+        return -1;
+    }
+    syscall_munmap(call_ctx, mmap_memory);
+    ptrace(PTRACE_DETACH, call_ctx->pid, NULL, NULL);
+    return ret;
 }
 

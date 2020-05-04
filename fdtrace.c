@@ -31,27 +31,24 @@ static struct option gLongOptions[] = {
 };
 
 void init(int argc, char** argv) {
-	gen_ctx = NULL;
-	gen_ctx->write_ctx = NULL;
-	gen_ctx->read_ctx = NULL;
-	gen_ctx->file_ctx = NULL;
 	long pid = parse_args(argc, argv);
+	gen_ctx = NULL;
+	init_general_context(pid);				
+	
 	if(pid == -1) {
 		write_log("FATAL ERROR", __FILE__, __LINE__, "must specify a remote process with -p\n");
 		gen_ctx->fatal_error = 1;
-		terminate();
-	}
-	init_general_context(pid);			
-	
+		terminate(__FILE__, __LINE__);
+	}	
 }
 
-void terminate() {
+void terminate(char * file, int line) {
 	int fatal_error = gen_ctx->fatal_error;	
 	release_file_context();
 	release_read_context();
 	release_write_context();
 	release_general_context();
-	write_log("INFO", __FILE__, __LINE__, "Terminating Execution");
+	write_log("INFO", file, line, "Terminating Execution");
 	if (fatal_error) {
 		exit(EXIT_FAILURE);
 	}
@@ -109,7 +106,7 @@ static file_context * init_file_context() {
 	if (file_ctx->dir == NULL) {
 		write_log("FATAL ERROR", __FILE__, __LINE__, strerror(errno));
 		gen_ctx->fatal_error = 1;
-		terminate();
+		terminate(__FILE__, __LINE__);
 	}
 	return file_ctx;
 }
@@ -121,11 +118,12 @@ static void init_general_context(long pid) {
 	gen_ctx->calloc_ptr = (void *)&calloc;
 	gen_ctx->target_fd = -1;
 	gen_ctx->fatal_error = 0;
-	gen_ctx->log_file = open(LOG_PATH, O_CREAT | O_WRONLY, 0777);
-	gen_ctx->write_ctx = init_write_ctx();
+	gen_ctx->log_file = open(LOG_PATH, O_CREAT | O_WRONLY, 0444);
+	gen_ctx->call_ctx = init_call_context(pid);
+	gen_ctx->write_ctx = init_write_context();
 	gen_ctx->read_ctx = init_read_context();
 	gen_ctx->file_ctx = init_file_context();
-	gen_ctx->call_ctx = init_call_context(pid);
+	
 }
 
 static write_context * init_write_context(void) {
@@ -135,11 +133,11 @@ static write_context * init_write_context(void) {
 	write_ctx->sys_write_args.sys_write_buf_addr = 0;
 	write_ctx->sys_write_args.sys_write_count = 0;
 	// Allocate memory in remote process and store write string there
-	write_ctx->write_replacement_buf_addr = call(gen_ctx->pid, LIB_C_STR, gen_ctx->calloc_ptr, 1, DATA_MAX_LEN);
+	write_ctx->write_replacement_buf_addr = call(gen_ctx->call_ctx, gen_ctx->calloc_ptr, 1, DATA_MAX_LEN);
 	if(write_ctx->write_replacement_buf_addr == 0) {
 		write_log("FATAL_ERROR", __FILE__, __LINE__, "Unable to allocate buffer in remote process\n");
 		gen_ctx->fatal_error = 1;
-		terminate();
+		terminate(__FILE__, __LINE__);
 	}
 	poke_remote_buffer(write_ctx->write_replacement_buf_addr, write_ctx->data_to_write);	
 	return write_ctx;
@@ -158,7 +156,7 @@ static int parse_args(int argc, char** argv) {
 		switch (c) {
 		case 'h':
 			write_log("INFO", __FILE__, __LINE__, USAGE);			
-			terminate();
+			terminate(__FILE__, __LINE__);
 			break;
 		case 'p':
 			pid = strtol(optarg, NULL, 10);

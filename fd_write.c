@@ -13,7 +13,7 @@
 void do_write() {
     // Writes message to stdout then sleeps      
     
-    int fd = open("/home/parsons/tmp/fdtest", O_NONBLOCK | O_WRONLY);
+    int fd = open("/home/parsons/Dev/fdman/fdtest.txt", O_NONBLOCK | O_WRONLY);
     //int read_fd = open("/dev/urandom", O_RDONLY);
     if(fd == -1) {
         perror("Error opening file");
