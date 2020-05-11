@@ -30,19 +30,20 @@ typedef struct file_context {
 } file_context;
 
 typedef struct read_context {
+	long remote_fifo_path_addr;
 	
 } read_context;
 
-typedef struct write_syscall_args {
-	unsigned int sys_write_fd;
-	long sys_write_buf_addr;
-	size_t sys_write_count;
-} write_syscall_args;
+typedef struct rdwr_syscall_args {
+	unsigned int sys_rdwr_fd;
+	long sys_rdwr_buf_addr;
+	size_t sys_rdwr_count;
+} rdwr_syscall_args;
 
 typedef struct write_context {
 	char * data_to_write;
 	long write_replacement_buf_addr;
-	write_syscall_args sys_write_args;
+	rdwr_syscall_args sys_rdwr_args;
 } write_context;
 
 typedef struct general_context {
@@ -53,10 +54,18 @@ typedef struct general_context {
 	long pid;
 	struct user_regs_struct * regs;
 	void * calloc_ptr;
+	void * dup2_ptr;
+	void * oepn_ptr;
+	void * close_ptr;
 	int target_fd;
 	int fatal_error;
 	int log_file;
 } general_context;
+
+typedef struct init_args {
+	long pid;
+	char * filepath;
+} init_args;
 
 /**
  * GLOBAL VARIABLES
@@ -72,5 +81,6 @@ void init(int argc, char** argv);
 void terminate();
 void scan_fd();
 void intercept_write();
+void intercept_read();
 void write_log(char * log_level, char * err_file, int line_number, char * log_str);
 #endif

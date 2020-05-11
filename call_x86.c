@@ -24,8 +24,7 @@ void *find_library(pid_t pid, const char *libname) {
 
 int poke_text(pid_t pid, void *where, void *new_text, void *old_text,
               size_t len) {
-  if (len % sizeof(void *) != 0) {
-    printf("invalid len, not a multiple of %zd\n", sizeof(void *));
+  if (len % sizeof(void *) != 0) {    
     return -1;
   }
 
@@ -62,16 +61,14 @@ void putdata(pid_t child, long addr, char *str, int len) {
     laddr = str;
     while(i < j) {
       memcpy(data.chars, laddr, sizeof(long));
-      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
-      //printf("Wrote %s\n",data.chars);
+      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);      
       ++i;
       laddr += sizeof(long);
     }
     j = len % sizeof(long);
     if(j != 0) {
       memcpy(data.chars, laddr, j);
-      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);
-      //printf("Wrote %s\n",data.chars);
+      ptrace(PTRACE_POKEDATA, child, addr + i * 8, data.val);     
     }
 }
 
@@ -84,11 +81,9 @@ int do_wait(const char *name) {
   if (WIFSTOPPED(status)) {
     if (WSTOPSIG(status) == SIGTRAP) {
       return 0;
-    }
-    printf("%s unexpectedly got status %s\n", name, strsignal(status));
+    }    
     return -1;
-  }
-  printf("%s got unexpected status %d\n", name, status);
+  }  
   return -1;
 }
 
@@ -250,6 +245,7 @@ void release_resources(call_x86_context * call_ctx, void * mmap_memory) {
     syscall_munmap(call_ctx, mmap_memory);
     poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, 
         call_ctx->old_word, NULL, sizeof(call_ctx->old_word));
+    ptrace(PTRACE_CONT, call_ctx->pid, 0, 0);
 }
 
 long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {      
@@ -258,7 +254,7 @@ long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {
     }    
     if(save_register_state(call_ctx->pid, call_ctx->register_save_state) == -1) {
         return -1;
-    }  
+    }      
     void * mmap_memory = syscall_mmap(call_ctx);
     if(mmap_memory == NULL) {
         release_resources(call_ctx, mmap_memory);
@@ -268,8 +264,7 @@ long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {
     if (singlestep(call_ctx->pid)) {
         release_resources(call_ctx, mmap_memory);
         return -1;
-    }
-    // Verify that JMP got us to the right address
+    }    
     if (ptrace(PTRACE_GETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
         release_resources(call_ctx, mmap_memory);
         return -1;
@@ -301,7 +296,7 @@ long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {
         return -1;
     }
     long ret = call_ctx->newregs->rax;    
-    call_ctx->newregs->rax = (long)call_ctx->register_save_state;  
+    call_ctx->newregs->rax = (long)call_ctx->register_save_state->rip;  
     if (ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->newregs)) {
         release_resources(call_ctx, mmap_memory);
         return -1;    
@@ -317,15 +312,12 @@ long call(call_x86_context * call_ctx, void *local_function, int nargs, ...) {
         release_resources(call_ctx, mmap_memory);
         return -1;
     }
-    if (call_ctx->newregs->rip != (long) call_ctx->register_save_state->rip) {
+    // We hit this
+    if (call_ctx->newregs->rip != (long) call_ctx->register_save_state->rip) {        
         release_resources(call_ctx, mmap_memory);
         return -1;
-    } 
-
-    //printf("restoring old text at %p\n", rip);
-    poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, call_ctx->old_word, NULL, sizeof(call_ctx->old_word));
-
-    //printf("restoring old registers\n");
+    }     
+    poke_text(call_ctx->pid, (void *) call_ctx->register_save_state->rip, call_ctx->old_word, NULL, sizeof(call_ctx->old_word));    
     if (ptrace(PTRACE_SETREGS, call_ctx->pid, NULL, call_ctx->register_save_state)) {
         release_resources(call_ctx, mmap_memory);
         return -1;
